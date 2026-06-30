@@ -7,6 +7,7 @@ const fs = require("fs");
 const path = require("path");
 
 const app = express();
+app.use(express.urlencoded({ extended: true }));
 const PORT = process.env.PORT || 3000;
 const DATA_FILE = path.join(__dirname, "data.json");
 
@@ -33,23 +34,51 @@ function logoFeedTap(tamano = 40) {
     </div>`;
 }
 
-// Estilos base compartidos por todas las páginas, para mantener el look consistente.
+// Estilos base compartidos por todas las páginas — layout de barra lateral fija,
+// filas de datos en monoespaciado y bordes rectos (sin tarjetas redondeadas con sombra).
 const ESTILO_BASE = `
   *{box-sizing:border-box;}
-  body{font-family:-apple-system,Segoe UI,Arial,sans-serif;background:${MARCA.fondo};margin:0;color:${MARCA.negro};}
+  body{font-family:-apple-system,Segoe UI,Arial,sans-serif;background:${MARCA.blanco};margin:0;color:${MARCA.negro};}
   a{color:${MARCA.negro};}
-  .topbar{background:${MARCA.negro};padding:18px 28px;display:flex;align-items:center;gap:14px;}
-  .topbar .nombre{color:${MARCA.blanco};font-weight:800;font-size:1.1rem;letter-spacing:-0.01em;}
-  .content{padding:32px 24px 60px;max-width:880px;margin:0 auto;}
-  .eyebrow{font-size:0.72rem;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:${MARCA.gris};margin-bottom:6px;}
-  .titulo-pagina{font-size:1.4rem;font-weight:800;margin:0 0 4px;letter-spacing:-0.01em;}
-  .subtitulo{color:${MARCA.gris};font-size:0.9rem;margin-bottom:28px;}
-  .back{color:${MARCA.gris};font-weight:600;font-size:0.85rem;text-decoration:none;}
+  .layout{display:flex;min-height:100vh;}
+  .sidebar{width:220px;flex-shrink:0;background:${MARCA.negro};padding:28px 22px;position:sticky;top:0;height:100vh;}
+  .sidebar .marca{display:flex;align-items:center;gap:10px;margin-bottom:42px;}
+  .sidebar .marca .nombre{color:${MARCA.blanco};font-weight:800;font-size:1.02rem;letter-spacing:-0.01em;}
+  .sidebar nav a{display:block;color:#999;font-size:0.84rem;font-weight:600;text-decoration:none;
+                 padding:10px 0;border-top:1px solid #2a2a2a;}
+  .sidebar nav a:first-child{border-top:none;}
+  .sidebar nav a:hover, .sidebar nav a.activo{color:${MARCA.blanco};}
+  .main{flex:1;padding:38px 44px 70px;max-width:760px;}
+  .eyebrow{font-size:0.68rem;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;color:#9a9a9a;margin-bottom:8px;font-family:monospace;}
+  .titulo-pagina{font-size:1.5rem;font-weight:800;margin:0 0 6px;letter-spacing:-0.015em;}
+  .subtitulo{color:${MARCA.gris};font-size:0.88rem;margin-bottom:30px;}
+  .back{color:${MARCA.gris};font-weight:600;font-size:0.8rem;text-decoration:none;font-family:monospace;}
+  @media (max-width:760px){
+    .layout{flex-direction:column;}
+    .sidebar{width:100%;height:auto;position:relative;padding:18px 20px;}
+    .sidebar nav{display:flex;gap:4px;overflow-x:auto;}
+    .sidebar nav a{border-top:none;padding:6px 12px;white-space:nowrap;}
+    .main{padding:26px 20px 50px;}
+  }
 `;
 
+function sidebar(activo, key) {
+  const item = (href, label, id) =>
+    `<a href="${href}" class="${activo === id ? "activo" : ""}">${label}</a>`;
+  return `
+    <div class="sidebar">
+      <div class="marca">${logoFeedTap(30)}<span class="nombre">FeedTap</span></div>
+      <nav>
+        ${item(`/stats?key=${key}`, "Estadísticas", "stats")}
+        ${item(`/editar?key=${key}`, "Agregar negocio", "editar")}
+      </nav>
+    </div>`;
+}
+
 // ---------- Configuración de negocios ----------
-// Agrega aquí un negocio por cada tarjeta NFC que tengas en la calle.
-// "slug" es lo que va en la URL del NFC, ej: /r/mi-negocio
+// Los negocios de aquí abajo (NEGOCIOS) son los que vienen escritos directo en el código.
+// También se pueden agregar negocios nuevos desde el navegador en /editar — esos se guardan
+// en negocios.json y se combinan automáticamente con los de aquí.
 const NEGOCIOS = {
   "mi-negocio": {
     nombre: "Mi Negocio",
@@ -60,6 +89,47 @@ const NEGOCIOS = {
   //   googleUrl: "https://g.page/r/OTRO_ENLACE/review",
   // },
 };
+
+const NEGOCIOS_FILE = path.join(__dirname, "negocios.json");
+
+function leerNegociosDinamicos() {
+  if (!fs.existsSync(NEGOCIOS_FILE)) return {};
+  try {
+    return JSON.parse(fs.readFileSync(NEGOCIOS_FILE, "utf8"));
+  } catch {
+    return {};
+  }
+}
+
+function guardarNegociosDinamicos(negocios) {
+  fs.writeFileSync(NEGOCIOS_FILE, JSON.stringify(negocios, null, 2));
+}
+
+// Junta los negocios escritos en el código con los creados desde /editar.
+function todosLosNegocios() {
+  return { ...NEGOCIOS, ...leerNegociosDinamicos() };
+}
+
+function obtenerNegocio(slug) {
+  return todosLosNegocios()[slug] || null;
+}
+
+// Genera un slug simple y único a partir del nombre del negocio (ej: "Café Sol" -> "cafe-sol").
+function generarSlug(nombre) {
+  const base = nombre
+    .toLowerCase()
+    .normalize("NFD").replace(/[\u0300-\u036f]/g, "") // quita tildes
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  const todos = todosLosNegocios();
+  let slug = base || "negocio";
+  let i = 2;
+  while (todos[slug]) {
+    slug = `${base}-${i}`;
+    i++;
+  }
+  return slug;
+}
 
 // ---------- Almacenamiento simple en archivo JSON ----------
 function leerDatos() {
@@ -144,12 +214,15 @@ function barraSemana(dias7) {
   const dias = diasSemanaCortos();
   return dias7
     .map((v, i) => {
-      const alturaPx = 6 + Math.round((v / max) * 44);
+      const tamano = 5 + Math.round((v / max) * 13); // diámetro del punto, 5 a 18px
       return `
-        <div style="display:flex;flex-direction:column;align-items:center;gap:4px;flex:1;">
-          <div style="font-size:0.62rem;color:${MARCA.gris};">${v}</div>
-          <div style="width:100%;max-width:20px;height:${alturaPx}px;background:${MARCA.negro};border-radius:4px 4px 0 0;"></div>
-          <div style="font-size:0.6rem;color:#999;text-transform:capitalize;">${dias[i]}</div>
+        <div style="display:flex;flex-direction:column;align-items:center;gap:6px;flex:1;">
+          <div style="font-size:0.6rem;color:#9a9a9a;font-family:monospace;">${v}</div>
+          <div style="width:100%;height:18px;display:flex;align-items:center;justify-content:center;position:relative;">
+            <div style="width:100%;height:1px;background:${MARCA.grisClaro};position:absolute;"></div>
+            <div style="width:${tamano}px;height:${tamano}px;border-radius:50%;background:${MARCA.negro};position:relative;z-index:1;"></div>
+          </div>
+          <div style="font-size:0.58rem;color:#999;text-transform:uppercase;font-family:monospace;">${dias[i]}</div>
         </div>`;
     })
     .join("");
@@ -163,7 +236,7 @@ function barraSemana(dias7) {
 // Ejemplo: https://tu-dominio.com/r/mi-negocio
 app.get("/r/:slug", (req, res) => {
   const { slug } = req.params;
-  const negocio = NEGOCIOS[slug];
+  const negocio = obtenerNegocio(slug);
 
   if (!negocio) {
     return res.status(404).send("Negocio no encontrado. Revisa el enlace del NFC.");
@@ -171,6 +244,92 @@ app.get("/r/:slug", (req, res) => {
 
   registrarToque(slug);
   res.redirect(302, negocio.googleUrl);
+});
+
+// Página para agregar negocios nuevos desde el navegador, sin tocar código.
+// Visítalo así: https://tu-dominio.com/editar?key=TU_CLAVE
+app.get("/editar", (req, res) => {
+  const key = req.query.key;
+  if (key !== ADMIN_KEY) {
+    return res.status(401).send("No autorizado. Agrega ?key=TU_CLAVE a la URL.");
+  }
+
+  const NEGOCIOS_TOTAL = todosLosNegocios();
+
+  res.send(`
+    <html>
+      <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>FeedTap — Agregar negocio</title>
+        <style>
+          ${ESTILO_BASE}
+          .main{max-width:560px;}
+          .form-card{border:1px solid ${MARCA.negro};padding:24px;margin-bottom:36px;}
+          label{font-size:0.74rem;font-weight:700;color:${MARCA.gris};display:block;margin:16px 0 6px;
+                text-transform:uppercase;letter-spacing:0.05em;font-family:monospace;}
+          label:first-of-type{margin-top:0;}
+          input{width:100%;padding:11px 0;border:none;border-bottom:1px solid ${MARCA.grisClaro};font-size:0.95rem;
+                font-family:inherit;background:transparent;}
+          input:focus{outline:none;border-bottom-color:${MARCA.negro};}
+          button{margin-top:24px;width:100%;background:${MARCA.negro};color:#fff;border:none;
+                 padding:13px;font-size:0.85rem;font-weight:700;cursor:pointer;text-transform:uppercase;
+                 letter-spacing:0.05em;font-family:monospace;}
+          .fila-tabla{display:flex;justify-content:space-between;padding:12px 0;border-bottom:1px solid ${MARCA.grisClaro};font-size:0.86rem;}
+          .fila-tabla:first-child{border-top:1px solid ${MARCA.negro};}
+          code{font-size:0.8rem;color:${MARCA.gris};}
+        </style>
+      </head>
+      <body>
+        <div class="layout">
+          ${sidebar("editar", key)}
+          <div class="main">
+            <a class="back" href="/stats?key=${key}">&larr; volver</a>
+            <div class="eyebrow" style="margin-top:14px;">/editar</div>
+            <h1 class="titulo-pagina">Agregar negocio</h1>
+            <div class="subtitulo">Queda activo de inmediato, listo para programar su tarjeta NFC.</div>
+
+            <div class="form-card">
+              <form method="POST" action="/editar?key=${key}">
+                <label>Nombre del negocio</label>
+                <input type="text" name="nombre" required placeholder="Ej: Restaurante Los Corales">
+                <label>Enlace de reseñas de Google</label>
+                <input type="url" name="googleUrl" required placeholder="https://g.page/r/.../review">
+                <button type="submit">Guardar negocio</button>
+              </form>
+            </div>
+
+            <div class="eyebrow">Negocios actuales</div>
+            ${
+              Object.entries(NEGOCIOS_TOTAL).length
+                ? Object.entries(NEGOCIOS_TOTAL)
+                    .map(([slug, n]) => `<div class="fila-tabla"><span>${n.nombre}</span><code>/r/${slug}</code></div>`)
+                    .join("")
+                : `<p style="color:${MARCA.gris};font-size:0.86rem;">Sin negocios todavía.</p>`
+            }
+          </div>
+        </div>
+      </body>
+    </html>
+  `);
+});
+
+app.post("/editar", (req, res) => {
+  const key = req.query.key;
+  if (key !== ADMIN_KEY) {
+    return res.status(401).send("No autorizado.");
+  }
+  const { nombre, googleUrl } = req.body;
+  if (!nombre || !googleUrl) {
+    return res.status(400).send("Faltan datos: nombre y enlace de Google son obligatorios.");
+  }
+
+  const slug = generarSlug(nombre);
+  const dinamicos = leerNegociosDinamicos();
+  dinamicos[slug] = { nombre, googleUrl };
+  guardarNegociosDinamicos(dinamicos);
+
+  res.redirect(`/editar?key=${key}`);
 });
 
 // Panel principal: una tarjeta por negocio con totales y mini gráfica.
@@ -182,12 +341,13 @@ app.get("/stats", (req, res) => {
   }
 
   const datos = leerDatos();
+  const NEGOCIOS_TOTAL = todosLosNegocios();
   let totalNegocios = 0;
   let totalGlobal = 0;
   let hoyGlobal = 0;
 
-  let tarjetas = "";
-  for (const slug in NEGOCIOS) {
+  let filasNegocios = "";
+  for (const slug in NEGOCIOS_TOTAL) {
     const eventos = (datos[slug] && datos[slug].eventos) || [];
     const r = calcularResumen(eventos);
     totalNegocios++;
@@ -196,30 +356,32 @@ app.get("/stats", (req, res) => {
 
     const ultimoTexto = r.ultimo ? r.ultimo.fechaLegible : "Sin toques todavía";
 
-    tarjetas += `
-      <div class="card">
-        <div class="card-top">
+    filasNegocios += `
+      <div class="fila-negocio">
+        <div class="fn-encabezado">
           <div>
-            <div class="card-nombre">${NEGOCIOS[slug].nombre}</div>
-            <div class="card-slug">/r/${slug}</div>
+            <div class="fn-nombre">${NEGOCIOS_TOTAL[slug].nombre}</div>
+            <div class="fn-slug">/r/${slug}</div>
           </div>
-          <div class="card-total">${r.total}<span>toques totales</span></div>
+          <div class="fn-total">${r.total}</div>
         </div>
-        <div class="card-metrics">
-          <div class="metric"><div class="metric-num">${r.hoy}</div><div class="metric-lbl">Hoy</div></div>
-          <div class="metric"><div class="metric-num">${r.semana}</div><div class="metric-lbl">7 días</div></div>
+        <div class="fn-cuerpo">
+          <div class="fn-stats">
+            <div class="fn-stat"><span>${r.hoy}</span> hoy</div>
+            <div class="fn-stat"><span>${r.semana}</span> 7 días</div>
+            <div class="fn-ultimo">Último: ${ultimoTexto}</div>
+          </div>
+          <div class="sparkline">${barraSemana(r.dias7)}</div>
         </div>
-        <div class="sparkline">${barraSemana(r.dias7)}</div>
-        <div class="card-ultimo">Último toque: <b>${ultimoTexto}</b></div>
-        <div class="card-actions">
-          <a href="/historial/${slug}?key=${key}">Ver historial</a>
-          <a href="/export/${slug}.pdf?key=${key}">Descargar PDF</a>
+        <div class="fn-actions">
+          <a href="/historial/${slug}?key=${key}">historial →</a>
+          <a href="/export/${slug}.pdf?key=${key}">descargar pdf →</a>
         </div>
       </div>`;
   }
 
-  if (!tarjetas) {
-    tarjetas = `<p style="color:${MARCA.gris}">No hay negocios configurados todavía en NEGOCIOS dentro de server.js.</p>`;
+  if (!filasNegocios) {
+    filasNegocios = `<p style="color:${MARCA.gris}">No hay negocios configurados todavía. Agrega uno desde "Agregar negocio".</p>`;
   }
 
   res.send(`
@@ -230,45 +392,42 @@ app.get("/stats", (req, res) => {
         <title>FeedTap — Estadísticas</title>
         <style>
           ${ESTILO_BASE}
-          .resumen-grid{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:32px;}
-          .resumen-box{background:#fff;border:1px solid ${MARCA.grisClaro};border-radius:12px;padding:18px 16px;text-align:center;flex:1;min-width:120px;}
-          .resumen-num{font-size:1.7rem;font-weight:800;color:${MARCA.negro};line-height:1;}
-          .resumen-lbl{font-size:0.7rem;color:${MARCA.gris};margin-top:6px;font-weight:600;text-transform:uppercase;letter-spacing:0.03em;}
-          .lista-negocios{display:flex;flex-direction:column;gap:14px;}
-          .card{background:#fff;border-radius:14px;padding:20px;border:1px solid ${MARCA.grisClaro};}
-          .card-top{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:16px;}
-          .card-nombre{font-weight:800;font-size:1.02rem;}
-          .card-slug{font-size:0.74rem;color:${MARCA.gris};margin-top:2px;font-family:monospace;}
-          .card-total{text-align:right;font-size:1.5rem;font-weight:800;color:${MARCA.negro};line-height:1;}
-          .card-total span{display:block;font-size:0.58rem;font-weight:600;color:${MARCA.gris};margin-top:4px;letter-spacing:0.03em;text-transform:uppercase;}
-          .card-metrics{display:flex;gap:10px;margin-bottom:16px;max-width:260px;}
-          .metric{background:${MARCA.fondo};border:1px solid ${MARCA.grisClaro};border-radius:10px;padding:10px;flex:1;text-align:center;}
-          .metric-num{font-size:1.15rem;font-weight:800;}
-          .metric-lbl{font-size:0.65rem;color:${MARCA.gris};margin-top:2px;font-weight:600;text-transform:uppercase;}
-          .sparkline{display:flex;align-items:flex-end;gap:4px;height:58px;margin-bottom:14px;max-width:280px;}
-          .card-ultimo{font-size:0.8rem;color:${MARCA.gris};margin-bottom:14px;padding-top:12px;border-top:1px solid ${MARCA.grisClaro};}
-          .card-ultimo b{color:${MARCA.negro};}
-          .card-actions a{color:${MARCA.negro};font-weight:700;text-decoration:underline;font-size:0.8rem;margin-right:18px;}
+          .resumen-fila{display:flex;border-top:1px solid ${MARCA.negro};border-bottom:1px solid ${MARCA.negro};margin-bottom:36px;}
+          .resumen-celda{flex:1;padding:16px 0;text-align:left;}
+          .resumen-celda:not(:first-child){border-left:1px solid ${MARCA.grisClaro};padding-left:18px;}
+          .resumen-num{font-size:1.9rem;font-weight:800;font-family:monospace;line-height:1;}
+          .resumen-lbl{font-size:0.68rem;color:${MARCA.gris};margin-top:6px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;}
+          .fila-negocio{border-bottom:1px solid ${MARCA.grisClaro};padding:22px 0;}
+          .fila-negocio:first-child{border-top:1px solid ${MARCA.grisClaro};}
+          .fn-encabezado{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:14px;}
+          .fn-nombre{font-weight:800;font-size:1.05rem;}
+          .fn-slug{font-size:0.74rem;color:${MARCA.gris};font-family:monospace;margin-top:2px;}
+          .fn-total{font-size:1.6rem;font-weight:800;font-family:monospace;}
+          .fn-cuerpo{display:flex;justify-content:space-between;align-items:flex-end;gap:24px;margin-bottom:14px;flex-wrap:wrap;}
+          .fn-stats{display:flex;flex-direction:column;gap:6px;}
+          .fn-stat{font-size:0.82rem;color:${MARCA.gris};}
+          .fn-stat span{font-weight:800;color:${MARCA.negro};font-family:monospace;margin-right:4px;}
+          .fn-ultimo{font-size:0.76rem;color:#9a9a9a;margin-top:4px;}
+          .sparkline{display:flex;gap:10px;max-width:260px;flex:1;min-width:200px;}
+          .fn-actions a{color:${MARCA.negro};font-weight:700;text-decoration:none;font-size:0.78rem;
+                        font-family:monospace;margin-right:22px;border-bottom:1px solid ${MARCA.negro};padding-bottom:1px;}
         </style>
       </head>
       <body>
-        <div class="topbar">
-          ${logoFeedTap(34)}
-          <span class="nombre">FeedTap</span>
-        </div>
-        <div class="content">
-          <div class="eyebrow">Tiempo real</div>
-          <h1 class="titulo-pagina">Estadísticas</h1>
-          <div class="subtitulo">Resumen de toques por negocio.</div>
+        <div class="layout">
+          ${sidebar("stats", key)}
+          <div class="main">
+            <div class="eyebrow">/stats</div>
+            <h1 class="titulo-pagina">Estadísticas</h1>
+            <div class="subtitulo">Resumen de toques por negocio.</div>
 
-          <div class="resumen-grid">
-            <div class="resumen-box"><div class="resumen-num">${totalNegocios}</div><div class="resumen-lbl">Negocios</div></div>
-            <div class="resumen-box"><div class="resumen-num">${totalGlobal}</div><div class="resumen-lbl">Toques totales</div></div>
-            <div class="resumen-box"><div class="resumen-num">${hoyGlobal}</div><div class="resumen-lbl">Toques hoy</div></div>
-          </div>
+            <div class="resumen-fila">
+              <div class="resumen-celda"><div class="resumen-num">${totalNegocios}</div><div class="resumen-lbl">Negocios</div></div>
+              <div class="resumen-celda"><div class="resumen-num">${totalGlobal}</div><div class="resumen-lbl">Toques totales</div></div>
+              <div class="resumen-celda"><div class="resumen-num">${hoyGlobal}</div><div class="resumen-lbl">Toques hoy</div></div>
+            </div>
 
-          <div class="lista-negocios">
-            ${tarjetas}
+            ${filasNegocios}
           </div>
         </div>
       </body>
@@ -285,7 +444,7 @@ app.get("/historial/:slug", (req, res) => {
   }
 
   const { slug } = req.params;
-  const negocio = NEGOCIOS[slug];
+  const negocio = obtenerNegocio(slug);
   if (!negocio) return res.status(404).send("Negocio no encontrado.");
 
   const datos = leerDatos();
@@ -305,25 +464,25 @@ app.get("/historial/:slug", (req, res) => {
         <title>FeedTap — Historial de ${negocio.nombre}</title>
         <style>
           ${ESTILO_BASE}
-          .content{max-width:560px;}
-          table{border-collapse:collapse;width:100%;background:#fff;border-radius:10px;overflow:hidden;border:1px solid ${MARCA.grisClaro};margin-top:18px;}
-          th,td{padding:11px 16px;text-align:left;border-bottom:1px solid ${MARCA.grisClaro};font-size:0.88rem;}
-          th{background:${MARCA.negro};color:${MARCA.blanco};font-size:0.7rem;text-transform:uppercase;letter-spacing:0.03em;}
+          .main{max-width:560px;}
+          table{border-collapse:collapse;width:100%;border:1px solid ${MARCA.grisClaro};margin-top:18px;}
+          th,td{padding:11px 16px;text-align:left;border-bottom:1px solid ${MARCA.grisClaro};font-size:0.88rem;font-family:monospace;}
+          th{background:${MARCA.negro};color:${MARCA.blanco};font-size:0.68rem;text-transform:uppercase;letter-spacing:0.04em;}
         </style>
       </head>
       <body>
-        <div class="topbar">
-          ${logoFeedTap(34)}
-          <span class="nombre">FeedTap</span>
-        </div>
-        <div class="content">
-          <a class="back" href="/stats?key=${key}">&larr; Volver</a>
-          <h1 class="titulo-pagina" style="margin-top:14px;">${negocio.nombre}</h1>
-          <div class="subtitulo">Total: <b style="color:${MARCA.negro}">${eventos.length}</b> toques registrados</div>
-          <table>
-            <tr><th>#</th><th>Fecha y hora</th></tr>
-            ${filas || "<tr><td colspan='2'>Sin toques registrados todavía</td></tr>"}
-          </table>
+        <div class="layout">
+          ${sidebar("stats", key)}
+          <div class="main">
+            <a class="back" href="/stats?key=${key}">&larr; volver</a>
+            <div class="eyebrow" style="margin-top:14px;">/historial</div>
+            <h1 class="titulo-pagina">${negocio.nombre}</h1>
+            <div class="subtitulo">Total: <b style="color:${MARCA.negro}">${eventos.length}</b> toques registrados</div>
+            <table>
+              <tr><th>#</th><th>Fecha y hora</th></tr>
+              ${filas || "<tr><td colspan='2'>Sin toques registrados todavía</td></tr>"}
+            </table>
+          </div>
         </div>
       </body>
     </html>
@@ -339,7 +498,7 @@ app.get("/export/:slug.pdf", async (req, res) => {
   }
 
   const { slug } = req.params;
-  const negocio = NEGOCIOS[slug];
+  const negocio = obtenerNegocio(slug);
   if (!negocio) return res.status(404).send("Negocio no encontrado.");
 
   const { PDFDocument, rgb, StandardFonts } = require("pdf-lib");
